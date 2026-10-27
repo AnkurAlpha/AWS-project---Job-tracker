@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 export const getJobs = async () => {
   const res = await fetch(`${API_URL}/jobs`);

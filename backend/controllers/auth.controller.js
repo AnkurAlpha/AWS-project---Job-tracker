@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const crypto = require("crypto");
 const { hashPassword, verifyPassword } = require("../utils/password");
 const { createAdminToken, getJwtConfig } = require("../utils/jwt");
 
@@ -42,6 +43,9 @@ function ensureServerAuthConfig() {
 }
 
 async function signup(req, res) {
+  if (process.env.ALLOW_ADMIN_SIGNUP !== "true") {
+    return res.status(403).json({ error: "Admin registration is disabled" });
+  }
   const { username, password } = req.body || {};
   const validation = validateCredentialInput(username, password);
   if (validation.error) {
@@ -86,6 +90,19 @@ async function login(req, res) {
 
   try {
     await ensureAuthTable();
+    // The assigned account is authoritative even if an older database row
+    // happens to have the same username. Other users keep their database login.
+    const adminUsername = process.env.ADMIN_USERNAME;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    if (adminUsername && adminPassword && validation.username === adminUsername) {
+      const supplied = crypto.createHash("sha256").update(validation.password).digest();
+      const expected = crypto.createHash("sha256").update(adminPassword).digest();
+      if (!crypto.timingSafeEqual(supplied, expected)) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      const token = createAdminToken({ id: 0, username: adminUsername });
+      return res.json({ token, user: { id: 0, username: adminUsername, role: "admin" } });
+    }
     const result = await pool.query(
       "SELECT id, username, password_hash FROM admin_users WHERE username = $1",
       [validation.username]
@@ -99,13 +116,6 @@ async function login(req, res) {
       }
       const token = createAdminToken(user);
       return res.json({ token, user: { id: user.id, username: user.username, role: "admin" } });
-    }
-
-    const adminUsername = process.env.ADMIN_USERNAME;
-    const adminPassword = process.env.ADMIN_PASSWORD;
-    if (adminUsername && adminPassword && validation.username === adminUsername && validation.password === adminPassword) {
-      const token = createAdminToken({ id: 0, username: adminUsername });
-      return res.json({ token, user: { id: 0, username: adminUsername, role: "admin" } });
     }
 
     return res.status(401).json({ error: "Invalid credentials" });

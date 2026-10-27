@@ -54,7 +54,12 @@ const Layout = ({ children }) => {
       <footer className="relative z-10 mt-8 border-t border-slate-200/70 bg-white/50 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-6 text-sm text-slate-600 sm:px-6 lg:px-8">
           <span>Job Application Tracker</span>
-          <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Built by AnkurAlpha</span>
+          <span className="flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-1 text-xs uppercase tracking-[0.16em] text-slate-500">
+            <span>Built by</span>
+            <a href="https://github.com/AnkurAlpha" target="_blank" rel="noopener noreferrer" className="break-all hover:underline">ANKURALPHA</a>
+            <span>and</span>
+            <a href="https://github.com/sohomsarkar2006-rgb" target="_blank" rel="noopener noreferrer" className="break-all hover:underline">sohomsarkar2006-rgb</a>
+          </span>
         </div>
       </footer>
       <Toaster richColors position="top-right" offset={20} closeButton theme="light" />

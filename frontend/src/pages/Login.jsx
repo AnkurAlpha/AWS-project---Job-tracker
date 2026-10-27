@@ -6,6 +6,7 @@ import { LogIn, PlusCircle, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Login() {
+  const signupEnabled = import.meta.env.VITE_ALLOW_ADMIN_SIGNUP === "true";
   const { login, token } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -112,9 +113,9 @@ export default function Login() {
   return (
     <section className="mx-auto max-w-md glass-card rounded-3xl p-8">
       <h1 className="text-3xl font-bold tracking-tight text-slate-900">Admin Access</h1>
-      <p className="mt-2 text-sm text-slate-600">Sign in or create an admin account to manage jobs.</p>
+      <p className="mt-2 text-sm text-slate-600">Sign in with your assigned admin account to manage jobs.</p>
 
-      <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-1">
+      {signupEnabled && <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-1">
         <button
           type="button"
           onClick={() => {
@@ -141,7 +142,7 @@ export default function Login() {
         >
           Signup
         </button>
-      </div>
+      </div>}
 
       {error ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 

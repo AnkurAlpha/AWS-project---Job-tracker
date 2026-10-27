@@ -2,9 +2,14 @@
 
 Full-stack hiring workflow app with public job applications and admin hiring controls.
 
+Built by [ANKURALPHA](https://github.com/AnkurAlpha) and [sohomsarkar2006-rgb](https://github.com/sohomsarkar2006-rgb).
+
+This repository is the source of truth for future application changes. Deployment
+operations and private credentials are maintained separately from application source.
+
 ## What This Project Includes
 - Public candidate flow: browse jobs, view details, and submit applications.
-- Admin flow: signup/login with JWT, fallback env-based login, create/delete jobs, manage applicant statuses, and remove applicants.
+- Admin flow: assigned login with JWT, create/delete jobs, manage applicant statuses, and remove applicants. Public admin registration is disabled by default.
 - Modern frontend UX: toasts, skeleton loading, icons, subtle animations, theme-aware particles background, and dark/light mode.
 
 ## Tech Stack
@@ -31,15 +36,20 @@ frontend/
 ```
 
 ## Prerequisites
-- Node.js 20+
-- pnpm 9+
+- Node.js 22 or newer
+- pnpm 10
 - Docker + Docker Compose
 
 ## Environment Setup
-1. Create backend env:
+1. Create a private local admin account and backend configuration:
 ```bash
-cp backend/.env.example backend/.env
+node scripts/setup-admin.cjs
 ```
+This configures username `sohom-admin` and a unique password. Read the password
+from the generated `PRIVATE-ADMIN-LOGIN.txt`; it is not published in this
+repository. Running setup again rotates the local application password. It does
+not modify a hosted application or an AWS IAM password.
+
 2. Create frontend env:
 ```bash
 cp frontend/.env.example frontend/.env
@@ -52,10 +62,16 @@ Required/important variables:
 - `JWT_EXPIRES_IN` (optional, default `12h`)
 - `JWT_ISSUER` (optional, default `job-tracker-api`)
 - `JWT_AUDIENCE` (optional, default `job-tracker-admin`)
-- `ADMIN_USERNAME` (fallback login)
-- `ADMIN_PASSWORD` (fallback login)
+- `ADMIN_USERNAME` (assigned account, default name `sohom-admin`)
+- `ADMIN_PASSWORD` (unique private password generated during setup)
+- `ALLOW_ADMIN_SIGNUP` (default `false`)
 - Frontend:
-- `VITE_API_URL` (example: `http://localhost:5000`)
+- `VITE_API_URL` (default `/api`, forwarded to localhost:5000 by Vite during development)
+- `VITE_ALLOW_ADMIN_SIGNUP` (default `false`; enabling the signup UI also requires explicit backend permission)
+
+Edit `DATABASE_URL` for your PostgreSQL installation before starting the backend.
+The example database password is for local development. Keep real environment
+files and the generated login file private. Use only `.env.example` in commits.
 
 ## Local Development
 Install dependencies:
@@ -96,11 +112,13 @@ Default ports:
 - Postgres: `localhost:5432`
 
 ## Authentication and Authorization
-- Admin signup: `POST /auth/signup`
+- Admin signup: `POST /auth/signup`, returns 403 unless explicitly enabled
 - Admin login: `POST /auth/login`
 - Session verify: `GET /auth/me`
 - JWT-based route protection for admin APIs
-- Fallback admin auth from env credentials when DB user is unavailable
+- The assigned environment account is authoritative for its username, including when an older database row has the same name.
+- Other database accounts verify their PBKDF2 password hash.
+- `/health` reports database readiness and returns 503 during a database outage.
 
 Frontend auth behavior:
 - Stores token/user in localStorage
@@ -116,7 +134,7 @@ Frontend auth behavior:
 | Method | Path | Access | Description |
 |---|---|---|---|
 | GET | `/health` | Public | Health check |
-| POST | `/auth/signup` | Public | Create admin user, returns `{ token, user }` |
+| POST | `/auth/signup` | Disabled by default | Explicit opt-in required before admin registration |
 | POST | `/auth/login` | Public | Admin login, returns `{ token, user }` |
 | GET | `/auth/me` | Admin (JWT) | Validate token and fetch current user |
 | GET | `/jobs` | Public | List jobs |
@@ -149,6 +167,9 @@ pnpm --dir frontend build
 
 # backend start
 pnpm --dir backend start
+
+# backend authentication and readiness regression tests
+pnpm --dir backend test
 
 # docker rebuild
 docker compose up -d --build
