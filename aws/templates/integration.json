@@ -1,0 +1,863 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dormant SQS -> Standard Step Functions -> DynamoDB -> SNS workflow, with DLQ and Streams.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "EnableConsumers": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnableResources"
+        },
+        "true"
+      ]
+    },
+    "ConsumersEnabled": {
+      "Fn::And": [
+        {
+          "Condition": "Enabled"
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableConsumers"
+            },
+            "true"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "DeadLetters": {
+      "Type": "AWS::SQS::Queue",
+      "Condition": "Enabled",
+      "Properties": {
+        "QueueName": {
+          "Fn::Sub": "${ProjectName}-event-dlq"
+        },
+        "SqsManagedSseEnabled": true,
+        "RedriveAllowPolicy": {
+          "redrivePermission": "byQueue",
+          "sourceQueueArns": [
+            {
+              "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ProjectName}-events"
+            }
+          ]
+        },
+        "MessageRetentionPeriod": 1209600,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Events": {
+      "Type": "AWS::SQS::Queue",
+      "Condition": "Enabled",
+      "Properties": {
+        "QueueName": {
+          "Fn::Sub": "${ProjectName}-events"
+        },
+        "SqsManagedSseEnabled": true,
+        "VisibilityTimeout": 180,
+        "MessageRetentionPeriod": 345600,
+        "ReceiveMessageWaitTimeSeconds": 20,
+        "MaximumMessageSize": 4096,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "DeadLetters",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": 5
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "QueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Condition": "Enabled",
+      "Properties": {
+        "Queues": [
+          {
+            "Ref": "Events"
+          },
+          {
+            "Ref": "DeadLetters"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Events",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::GetAtt": [
+                    "DeadLetters",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Audit": {
+      "Type": "AWS::DynamoDB::Table",
+      "Condition": "Enabled",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "event_id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "event_id",
+            "KeyType": "HASH"
+          }
+        ],
+        "BillingMode": "PROVISIONED",
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": 1,
+          "WriteCapacityUnits": 1
+        },
+        "StreamSpecification": {
+          "StreamViewType": "KEYS_ONLY"
+        },
+        "TimeToLiveSpecification": {
+          "AttributeName": "expires_at",
+          "Enabled": true
+        },
+        "DeletionProtectionEnabled": true,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Notifications": {
+      "Type": "AWS::SNS::Topic",
+      "Condition": "Enabled",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "WorkflowRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "Enabled",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ProjectOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:PutItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Audit",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sns:Publish"
+                  ],
+                  "Resource": {
+                    "Ref": "Notifications"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "Workflow": {
+      "Type": "AWS::StepFunctions::StateMachine",
+      "Condition": "Enabled",
+      "Properties": {
+        "StateMachineType": "STANDARD",
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "WorkflowRole",
+            "Arn"
+          ]
+        },
+        "Definition": {
+          "StartAt": "ValidateEvent",
+          "TimeoutSeconds": 120,
+          "States": {
+            "ValidateEvent": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.event_id",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.schema_version",
+                      "NumericEquals": 1
+                    }
+                  ],
+                  "Next": "RecordEvent"
+                }
+              ],
+              "Default": "InvalidEvent"
+            },
+            "InvalidEvent": {
+              "Type": "Fail",
+              "Error": "InvalidEvent"
+            },
+            "RecordEvent": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:putItem",
+              "Parameters": {
+                "TableName": {
+                  "Ref": "Audit"
+                },
+                "Item": {
+                  "event_id": {
+                    "S.$": "$.event_id"
+                  },
+                  "event_type": {
+                    "S.$": "$.event_type"
+                  },
+                  "occurred_at": {
+                    "S.$": "$.occurred_at"
+                  },
+                  "expires_at": {
+                    "N.$": "$.expires_at"
+                  },
+                  "detail": {
+                    "S.$": "States.JsonToString($)"
+                  }
+                },
+                "ConditionExpression": "attribute_not_exists(event_id)"
+              },
+              "ResultPath": null,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "DynamoDB.ProvisionedThroughputExceededException",
+                    "DynamoDB.ThrottlingException",
+                    "DynamoDB.InternalServerError"
+                  ],
+                  "IntervalSeconds": 2,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 4
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "DynamoDB.ConditionalCheckFailedException"
+                  ],
+                  "Next": "AlreadyRecorded",
+                  "ResultPath": null
+                }
+              ],
+              "Next": "NotifyAdmin"
+            },
+            "NotifyAdmin": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": {
+                  "Ref": "Notifications"
+                },
+                "Message.$": "States.JsonToString($)",
+                "Subject": "JobTracker hiring activity"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 2,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 4
+                }
+              ],
+              "End": true
+            },
+            "AlreadyRecorded": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "StarterRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "Enabled",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ProjectOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-event-starter:*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Events",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "states:StartExecution"
+                  ],
+                  "Resource": {
+                    "Ref": "Workflow"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "StarterLog": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "Enabled",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-event-starter"
+        },
+        "RetentionInDays": 7
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Starter": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "Enabled",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-event-starter"
+        },
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "StarterRole",
+            "Arn"
+          ]
+        },
+        "MemorySize": 128,
+        "Timeout": 30,
+        "Code": {
+          "ZipFile": "\"\"\"Minimal, versioned cloud events. Candidate data never belongs in these events.\"\"\"\nfrom datetime import datetime\nimport json\nfrom uuid import UUID\n\nTYPES = {\"job.published\", \"job.deleted\", \"application.submitted\",\n         \"application.status_changed\", \"application.deleted\"}\nALLOWED = {\"schema_version\", \"event_id\", \"event_type\", \"occurred_at\",\n           \"job_id\", \"application_id\", \"status\"}\n\n\ndef validate_event(raw):\n    if isinstance(raw, str):\n        if len(raw.encode(\"utf-8\")) > 4096:\n            raise ValueError(\"Event exceeds its size limit\")\n        raw = json.loads(raw)\n    if not isinstance(raw, dict) or set(raw) - ALLOWED:\n        raise ValueError(\"Unexpected event fields\")\n    if type(raw.get(\"schema_version\")) is not int or raw[\"schema_version\"] != 1:\n        raise ValueError(\"Unsupported event schema\")\n    if raw.get(\"event_type\") not in TYPES:\n        raise ValueError(\"Unknown event type\")\n    event_id = str(UUID(raw[\"event_id\"]))\n    occurred_at = datetime.fromisoformat(raw[\"occurred_at\"].replace(\"Z\", \"+00:00\"))\n    if occurred_at.tzinfo is None:\n        raise ValueError(\"Event time must include timezone\")\n    required = [\"job_id\"]\n    if raw[\"event_type\"].startswith(\"application.\"):\n        required.append(\"application_id\")\n    for key in required:\n        if type(raw.get(key)) is not int or not 0 < raw[key] <= 9007199254740991:\n            raise ValueError(\"Missing or invalid event ID\")\n    for key in (\"job_id\", \"application_id\"):\n        if key in raw and (type(raw[key]) is not int or not 0 < raw[key] <= 9007199254740991):\n            raise ValueError(\"Invalid event ID\")\n    if \"status\" in raw and raw[\"status\"] not in {\"applied\", \"interview\", \"passed\"}:\n        raise ValueError(\"Invalid application status\")\n    if raw[\"event_type\"] in {\"application.submitted\", \"application.status_changed\"} and \"status\" not in raw:\n        raise ValueError(\"Application status is missing\")\n    # Deterministic across SQS redelivery: Step Functions uses the same execution name/input.\n    return {**raw, \"event_id\": event_id, \"expires_at\": str(int(occurred_at.timestamp()) + 7 * 86400)}\n\n\"\"\"SQS consumer: validate minimal events, start a durable workflow, report batch failures.\"\"\"\nimport json\nimport os\nimport boto3\n\n\n\ndef handler(event, context, *, client=None):\n    client = client or boto3.client(\"stepfunctions\")\n    failures = []\n    for record in event.get(\"Records\", []):\n        try:\n            payload = validate_event(record[\"body\"])\n            client.start_execution(stateMachineArn=os.environ[\"STATE_MACHINE_ARN\"],\n                name=\"event_\" + payload[\"event_id\"],\n                input=json.dumps(payload, sort_keys=True, separators=(\",\", \":\")))\n        except Exception as error:\n            # Standard workflow execution names remain unique for 90 days. Re-delivery\n            # of a previously accepted event must not launch a duplicate workflow.\n            code = getattr(error, \"response\", {}).get(\"Error\", {}).get(\"Code\")\n            if code != \"ExecutionAlreadyExists\":\n                failures.append({\"itemIdentifier\": record[\"messageId\"]})\n    return {\"batchItemFailures\": failures}\n"
+        },
+        "Environment": {
+          "Variables": {
+            "STATE_MACHINE_ARN": {
+              "Ref": "Workflow"
+            }
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DependsOn": [
+        "StarterLog"
+      ]
+    },
+    "EventsMapping": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "Condition": "Enabled",
+      "Properties": {
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "Events",
+            "Arn"
+          ]
+        },
+        "FunctionName": {
+          "Ref": "Starter"
+        },
+        "BatchSize": 5,
+        "Enabled": {
+          "Fn::If": [
+            "ConsumersEnabled",
+            true,
+            false
+          ]
+        },
+        "ScalingConfig": {
+          "MaximumConcurrency": 2
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures"
+        ]
+      }
+    },
+    "StreamRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "Enabled",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ProjectOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-stream-audit:*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:DescribeStream",
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Audit",
+                      "StreamArn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:ListStreams"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "StreamLog": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "Enabled",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-stream-audit"
+        },
+        "RetentionInDays": 7
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Stream": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "Enabled",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-stream-audit"
+        },
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "StreamRole",
+            "Arn"
+          ]
+        },
+        "MemorySize": 128,
+        "Timeout": 30,
+        "Code": {
+          "ZipFile": "\"\"\"DynamoDB Streams demonstration; log event identifiers only, not item contents.\"\"\"\nimport json\n\n\ndef handler(event, context):\n    for record in event.get(\"Records\", []):\n        print(json.dumps({\"event\": \"audit_stream_change\", \"change\": record[\"eventName\"],\n                          \"event_id\": record.get(\"dynamodb\", {}).get(\"Keys\", {}).get(\"event_id\", {}).get(\"S\")}))\n    return {\"records\": len(event.get(\"Records\", []))}\n"
+        },
+        "Environment": {
+          "Variables": {}
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DependsOn": [
+        "StreamLog"
+      ]
+    },
+    "StreamMapping": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "Condition": "Enabled",
+      "Properties": {
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "Audit",
+            "StreamArn"
+          ]
+        },
+        "FunctionName": {
+          "Ref": "Stream"
+        },
+        "StartingPosition": "LATEST",
+        "BatchSize": 10,
+        "MaximumRetryAttempts": 3,
+        "MaximumRecordAgeInSeconds": 3600,
+        "BisectBatchOnFunctionError": true,
+        "Enabled": {
+          "Fn::If": [
+            "ConsumersEnabled",
+            true,
+            false
+          ]
+        }
+      }
+    },
+    "FailedWorkflowAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "Enabled",
+      "Properties": {
+        "Namespace": "AWS/States",
+        "MetricName": "ExecutionsFailed",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "Workflow"
+            }
+          }
+        ],
+        "AlarmActions": [
+          {
+            "Ref": "Notifications"
+          }
+        ]
+      }
+    },
+    "DeadLetterAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "Enabled",
+      "Properties": {
+        "Namespace": "AWS/SQS",
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "DeadLetters",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "AlarmActions": [
+          {
+            "Ref": "Notifications"
+          }
+        ]
+      }
+    },
+    "AlarmTopicPolicy": {
+      "Type": "AWS::SNS::TopicPolicy",
+      "Condition": "Enabled",
+      "Properties": {
+        "Topics": [
+          {
+            "Ref": "Notifications"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sns:Publish",
+              "Resource": {
+                "Ref": "Notifications"
+              },
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:*"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "QueueUrl": {
+      "Value": {
+        "Ref": "Events"
+      },
+      "Condition": "Enabled"
+    },
+    "QueueArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Events",
+          "Arn"
+        ]
+      },
+      "Condition": "Enabled"
+    },
+    "AuditTable": {
+      "Value": {
+        "Ref": "Audit"
+      },
+      "Condition": "Enabled"
+    },
+    "NotificationTopicArn": {
+      "Value": {
+        "Ref": "Notifications"
+      },
+      "Condition": "Enabled"
+    },
+    "StateMachineArn": {
+      "Value": {
+        "Ref": "Workflow"
+      },
+      "Condition": "Enabled"
+    }
+  }
+}

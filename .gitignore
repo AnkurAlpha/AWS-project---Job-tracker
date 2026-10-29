@@ -10,3 +10,11 @@
 PRIVATE-*.txt
 **/PRIVATE-*.txt
 **/dist/
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
+aws/config.local.json
+aws/artifacts/
+smoke-results*.json
+*.bundle
+/pnpm-lock.yaml

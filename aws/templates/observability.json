@@ -1,0 +1,324 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Optional basic EC2 alarms and single management-event CloudTrail copy; no data events or Config recorder.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "ExistingInstanceId": {
+      "Type": "AWS::EC2::Instance::Id"
+    },
+    "AlertTopicArn": {
+      "Type": "String"
+    },
+    "EnableTrail": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnableResources"
+        },
+        "true"
+      ]
+    },
+    "TrailEnabled": {
+      "Fn::And": [
+        {
+          "Condition": "Enabled"
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableTrail"
+            },
+            "true"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "ApplicationLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "Enabled",
+      "Properties": {
+        "LogGroupName": "/jobtracker/operations",
+        "RetentionInDays": 7
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Diagnostics": {
+      "Type": "AWS::SSM::Document",
+      "Condition": "Enabled",
+      "Properties": {
+        "DocumentType": "Command",
+        "DocumentFormat": "JSON",
+        "Content": {
+          "schemaVersion": "2.2",
+          "description": "Read-only JobTracker status; no secret files, environment or credentials",
+          "mainSteps": [
+            {
+              "action": "aws:runShellScript",
+              "name": "status",
+              "inputs": {
+                "timeoutSeconds": "60",
+                "runCommand": [
+                  "systemctl is-active jobtracker.service || true",
+                  "docker ps --format '{{.Names}} {{.Status}}'",
+                  "df -h /opt/jobtracker"
+                ]
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "StatusFailed": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "Enabled",
+      "Properties": {
+        "Namespace": "AWS/EC2",
+        "MetricName": "StatusCheckFailed",
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "Dimensions": [
+          {
+            "Name": "InstanceId",
+            "Value": {
+              "Ref": "ExistingInstanceId"
+            }
+          }
+        ],
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ]
+      }
+    },
+    "HighCPU": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "Enabled",
+      "Properties": {
+        "Namespace": "AWS/EC2",
+        "MetricName": "CPUUtilization",
+        "Statistic": "Average",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 80,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "Dimensions": [
+          {
+            "Name": "InstanceId",
+            "Value": {
+              "Ref": "ExistingInstanceId"
+            }
+          }
+        ],
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ]
+      }
+    },
+    "TrailBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Condition": "TrailEnabled",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Status": "Enabled",
+              "ExpirationInDays": 30,
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "TrailBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Condition": "TrailEnabled",
+      "Properties": {
+        "Bucket": {
+          "Ref": "TrailBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetBucketAcl",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "TrailBucket",
+                  "Arn"
+                ]
+              },
+              "Principal": {
+                "Service": "cloudtrail.amazonaws.com"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-management"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:PutObject",
+              "Resource": {
+                "Fn::Sub": "${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+              },
+              "Principal": {
+                "Service": "cloudtrail.amazonaws.com"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "s3:x-amz-acl": "bucket-owner-full-control",
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-management"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "TrailBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${TrailBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ManagementTrail": {
+      "Type": "AWS::CloudTrail::Trail",
+      "Condition": "TrailEnabled",
+      "Properties": {
+        "TrailName": {
+          "Fn::Sub": "${ProjectName}-management"
+        },
+        "S3BucketName": {
+          "Ref": "TrailBucket"
+        },
+        "IsLogging": true,
+        "IsMultiRegionTrail": true,
+        "IncludeGlobalServiceEvents": true,
+        "EnableLogFileValidation": true,
+        "EventSelectors": [
+          {
+            "ReadWriteType": "WriteOnly",
+            "IncludeManagementEvents": true
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DependsOn": [
+        "TrailBucketPolicy"
+      ]
+    }
+  },
+  "Outputs": {}
+}

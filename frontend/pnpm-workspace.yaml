@@ -1,0 +1,10 @@
+packages:
+  - .
+allowBuilds:
+  '@tsparticles/engine': set this to true or false
+  esbuild: set this to true or false
+minimumReleaseAge: 1440
+onlyBuiltDependencies:
+  - esbuild
+ignoredBuiltDependencies:
+  - '@tsparticles/engine'

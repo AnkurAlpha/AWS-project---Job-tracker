@@ -1,0 +1,255 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Cost-gated EFS reference: encryption, TLS requirement, access point, private NFS mount targets.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "AcknowledgeHourlyCharges": {
+      "Type": "String",
+      "Default": "no",
+      "AllowedValues": [
+        "no",
+        "yes"
+      ],
+      "Description": "This lab has ongoing costs and may require a Paid plan. Never upgrade automatically."
+    },
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "PrivateSubnetA": {
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "PrivateSubnetB": {
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "AppSecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableResources"
+            },
+            "true"
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AcknowledgeHourlyCharges"
+            },
+            "yes"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Files": {
+      "Type": "AWS::EFS::FileSystem",
+      "Condition": "Enabled",
+      "Properties": {
+        "Encrypted": true,
+        "PerformanceMode": "generalPurpose",
+        "ThroughputMode": "bursting",
+        "LifecyclePolicies": [
+          {
+            "TransitionToIA": "AFTER_30_DAYS"
+          }
+        ],
+        "FileSystemPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "elasticfilesystem:Client*",
+              "Resource": "*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        },
+        "FileSystemTags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "MountSecurity": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Condition": "Enabled",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "NFS only from application tier",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 2049,
+            "ToPort": 2049,
+            "SourceSecurityGroupId": {
+              "Ref": "AppSecurityGroupId"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "MountA": {
+      "Type": "AWS::EFS::MountTarget",
+      "Condition": "Enabled",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "Files"
+        },
+        "SubnetId": {
+          "Ref": "PrivateSubnetA"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "MountSecurity"
+          }
+        ]
+      }
+    },
+    "MountB": {
+      "Type": "AWS::EFS::MountTarget",
+      "Condition": "Enabled",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "Files"
+        },
+        "SubnetId": {
+          "Ref": "PrivateSubnetB"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "MountSecurity"
+          }
+        ]
+      }
+    },
+    "AccessPoint": {
+      "Type": "AWS::EFS::AccessPoint",
+      "Condition": "Enabled",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "Files"
+        },
+        "PosixUser": {
+          "Uid": "1000",
+          "Gid": "1000"
+        },
+        "RootDirectory": {
+          "Path": "/jobtracker",
+          "CreationInfo": {
+            "OwnerUid": "1000",
+            "OwnerGid": "1000",
+            "Permissions": "750"
+          }
+        },
+        "AccessPointTags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "FileSystemId": {
+      "Value": {
+        "Ref": "Files"
+      },
+      "Condition": "Enabled"
+    },
+    "AccessPointId": {
+      "Value": {
+        "Ref": "AccessPoint"
+      },
+      "Condition": "Enabled"
+    }
+  },
+  "Rules": {
+    "AcknowledgeCost": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "EnableResources"
+                  },
+                  "false"
+                ]
+              },
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AcknowledgeHourlyCharges"
+                  },
+                  "yes"
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Hourly or paid-feature costs must be acknowledged before enabling this lab."
+        }
+      ]
+    }
+  }
+}

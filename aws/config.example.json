@@ -1,0 +1,16 @@
+{
+  "hosting_enabled": false,
+  "integration_enabled": false,
+  "credit_monitor_enabled": false,
+  "credit_monitor_schedule_enabled": false,
+  "paid_labs_enabled": false,
+  "region": "ap-south-1",
+  "profile": "jobtracker-deploy",
+  "credit_reserve_usd": 25,
+  "credit_alert_thresholds_usd": [100, 50, 25, 10],
+  "gross_monthly_alerts_usd": [1, 5, 10],
+  "log_retention_days": 7,
+  "backup_retention_days": 14,
+  "expected_account_id": "SET_YOUR_12_DIGIT_ACCOUNT_ID",
+  "note": "No resources are provisioned by this file. All cloud workloads remain disabled."
+}

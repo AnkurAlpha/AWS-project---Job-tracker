@@ -4,8 +4,30 @@ Full-stack hiring workflow app with public job applications and admin hiring con
 
 Built by [ANKURALPHA](https://github.com/AnkurAlpha) and [sohomsarkar2006-rgb](https://github.com/sohomsarkar2006-rgb).
 
-This repository is the source of truth for future application changes. Deployment
-operations and private credentials are maintained separately from application source.
+This repository is the source of truth for application changes and the reviewable
+AWS coursework extensions. Private credentials and runtime state remain outside
+source control. AWS hosting and new cloud features are **off by default**.
+
+## AWS coursework extensions - prepared, not deployed
+
+See [AWS guide](docs/aws/README.md), [complete syllabus coverage](docs/aws/SYLLABUS-COVERAGE.md),
+[cost and credit controls](docs/aws/COST-CONTROLS.md), and [migration/review notes](docs/aws/MIGRATION-AND-REVIEW.md).
+
+- Transactional PostgreSQL outbox for job/application events; optional SQS delivery,
+  Step Functions processing, short-lived DynamoDB audit and SNS notifications.
+- Credit reserve and low-balance/plan-expiry alerts, with opt-in daily monitoring.
+- Seventeen disabled-by-default CloudFormation templates. Expensive teaching labs
+  require a separate cost acknowledgement and are not the recommended deployment.
+- IMDSv2, role credentials, scoped policies, private storage, TLS-only APIs, bounded
+  retries/retention, loopback database/API ports, login throttling and secret-free images.
+- Offline HTTP/PostgreSQL smoke tests, fake AWS-client tests, template schema checks,
+  and CI with read-only GitHub permissions and no AWS deployment credentials.
+
+Run `python3 tools/smoke.py` in the documented development environment after
+installing the two pnpm lockfiles. This starts temporary loopback tests only and
+does not start, provision, modify or upgrade any AWS resource. No automatic
+deployment workflow is included. New credit alerts are not active until their
+monitor is deliberately deployed/enabled and its email subscription is confirmed.
 
 ## What This Project Includes
 - Public candidate flow: browse jobs, view details, and submit applications.
@@ -58,6 +80,7 @@ cp frontend/.env.example frontend/.env
 Required/important variables:
 - Backend:
 - `DATABASE_URL`
+- `DATABASE_SSL`, `DATABASE_SSL_CA_FILE` (future managed PostgreSQL; verified CA required when enabled)
 - `JWT_SECRET`
 - `JWT_EXPIRES_IN` (optional, default `12h`)
 - `JWT_ISSUER` (optional, default `job-tracker-api`)
@@ -65,6 +88,10 @@ Required/important variables:
 - `ADMIN_USERNAME` (assigned account, default name `sohom-admin`)
 - `ADMIN_PASSWORD` (unique private password generated during setup)
 - `ALLOW_ADMIN_SIGNUP` (default `false`)
+- `AWS_EVENTS_ENABLED` (default `false`; requires the prepared AWS integration and worker before enabling)
+- `AWS_REGION`, `AWS_EVENT_QUEUE_URL` (worker configuration; use a role, not static AWS keys)
+- `BIND_HOST` (default `127.0.0.1`; Compose sets the internal container listener to `0.0.0.0`)
+- `TRUST_PROXY_HOPS` (default `0`; set `1` only behind a controlled proxy with no public direct backend port)
 - Frontend:
 - `VITE_API_URL` (default `/api`, forwarded to localhost:5000 by Vite during development)
 - `VITE_ALLOW_ADMIN_SIGNUP` (default `false`; enabling the signup UI also requires explicit backend permission)
@@ -108,8 +135,13 @@ docker compose down
 
 Default ports:
 - Frontend: `http://localhost:8080`
-- Backend: `http://localhost:5000`
-- Postgres: `localhost:5432`
+- Backend: `http://localhost:5000` (host loopback only)
+- Postgres: `localhost:5432` (host loopback only)
+
+The frontend proxies `/api/` to the backend. No browser-facing localhost API URL is
+baked into the image. Both images exclude private environment and login files.
+The optional `cloud` Compose profile is disabled by default and must not be started
+for an offline smoke test. Keep local demo database defaults out of cloud use.
 
 ## Authentication and Authorization
 - Admin signup: `POST /auth/signup`, returns 403 unless explicitly enabled
@@ -134,6 +166,8 @@ Frontend auth behavior:
 | Method | Path | Access | Description |
 |---|---|---|---|
 | GET | `/health` | Public | Health check |
+| GET | `/live` | Public | Process liveness, independently of database readiness |
+| GET | `/operations/events` | Admin (JWT) | Local event backlog/delivery/dead-letter counts |
 | POST | `/auth/signup` | Disabled by default | Explicit opt-in required before admin registration |
 | POST | `/auth/login` | Public | Admin login, returns `{ token, user }` |
 | GET | `/auth/me` | Admin (JWT) | Validate token and fetch current user |
@@ -150,6 +184,10 @@ Frontend auth behavior:
 - `jobs`, `applications`, and `admin_users` tables are created in `backend/db/init.sql`.
 - `applications.status` tracks pipeline stage and defaults to `applied`.
 - Seed data inserts two starter jobs if the jobs table is empty.
+- Startup runs checksum-tracked additive migrations under a transaction/advisory lock.
+- With cloud events enabled, business writes and minimal outbox records commit
+  together. A queue failure does not lose a committed business update. Published
+  outbox records expire after seven days; local dead letters after fourteen days.
 
 ## UI/UX Enhancements Implemented
 - Global toasts with success/error/promise patterns

@@ -7,7 +7,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Jobpass}
       POSTGRES_DB: ${POSTGRES_DB:-jobtracker}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -26,8 +28,19 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-jobuser}:${POSTGRES_PASSWORD:-Jobpass}@db:5432/${POSTGRES_DB:-jobtracker}
       PORT: 5000
+      BIND_HOST: 0.0.0.0
+      NODE_ENV: production
+      TRUST_PROXY_HOPS: "1"
+      AWS_EVENTS_ENABLED: ${AWS_EVENTS_ENABLED:-false}
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
     depends_on:
       db:
         condition: service_healthy
@@ -41,10 +54,28 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_URL: http://localhost:5000
+        VITE_API_URL: /api
     container_name: jobtracker_frontend
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  outbox:
+    profiles: [cloud]
+    build:
+      context: ./backend
+    command: ["node", "scripts/dispatch-outbox.cjs"]
+    env_file: [./backend/.env]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-jobuser}:${POSTGRES_PASSWORD:-Jobpass}@db:5432/${POSTGRES_DB:-jobtracker}
+      AWS_EVENTS_ENABLED: ${AWS_EVENTS_ENABLED:-false}
+    read_only: true
+    tmpfs: [/tmp:size=16m,noexec,nosuid]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
     depends_on:
       backend:
         condition: service_healthy

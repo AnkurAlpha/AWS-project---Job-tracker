@@ -1,0 +1,168 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Optional same-account VPC peering, with explicit routes. Cross-AZ/Region transfer can cost money.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "AcknowledgeHourlyCharges": {
+      "Type": "String",
+      "Default": "no",
+      "AllowedValues": [
+        "no",
+        "yes"
+      ],
+      "Description": "This lab has ongoing costs and may require a Paid plan. Never upgrade automatically."
+    },
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "PeerVpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "RouteTableId": {
+      "Type": "String"
+    },
+    "PeerRouteTableId": {
+      "Type": "String"
+    },
+    "VpcCidr": {
+      "Type": "String",
+      "AllowedPattern": "[0-9.]+/[0-9]{1,2}"
+    },
+    "PeerVpcCidr": {
+      "Type": "String",
+      "AllowedPattern": "[0-9.]+/[0-9]{1,2}"
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableResources"
+            },
+            "true"
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AcknowledgeHourlyCharges"
+            },
+            "yes"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Peering": {
+      "Type": "AWS::EC2::VPCPeeringConnection",
+      "Condition": "Enabled",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "PeerVpcId": {
+          "Ref": "PeerVpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "LocalRoute": {
+      "Type": "AWS::EC2::Route",
+      "Condition": "Enabled",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "RouteTableId"
+        },
+        "DestinationCidrBlock": {
+          "Ref": "PeerVpcCidr"
+        },
+        "VpcPeeringConnectionId": {
+          "Ref": "Peering"
+        }
+      }
+    },
+    "PeerRoute": {
+      "Type": "AWS::EC2::Route",
+      "Condition": "Enabled",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PeerRouteTableId"
+        },
+        "DestinationCidrBlock": {
+          "Ref": "VpcCidr"
+        },
+        "VpcPeeringConnectionId": {
+          "Ref": "Peering"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "PeeringConnectionId": {
+      "Value": {
+        "Ref": "Peering"
+      },
+      "Condition": "Enabled"
+    }
+  },
+  "Rules": {
+    "AcknowledgeCost": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "EnableResources"
+                  },
+                  "false"
+                ]
+              },
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AcknowledgeHourlyCharges"
+                  },
+                  "yes"
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Hourly or paid-feature costs must be acknowledged before enabling this lab."
+        }
+      ]
+    }
+  }
+}

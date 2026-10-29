@@ -1,0 +1,11 @@
+{
+  "name": "jobtracker-review-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.34.9",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "smoke": "python3 tools/smoke.py",
+    "aws:plan": "python3 tools/aws_ops.py plan",
+    "aws:templates": "python3 tools/build_aws_templates.py"
+  }
+}

@@ -1,0 +1,190 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Cost-gated private Aurora PostgreSQL reference. Not part of the minimum-cost deployment.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "AcknowledgeHourlyCharges": {
+      "Type": "String",
+      "Default": "no",
+      "AllowedValues": [
+        "no",
+        "yes"
+      ],
+      "Description": "This lab has ongoing costs and may require a Paid plan. Never upgrade automatically."
+    },
+    "PrivateSubnetIds": {
+      "Type": "List<AWS::EC2::Subnet::Id>"
+    },
+    "DatabaseSecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableResources"
+            },
+            "true"
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AcknowledgeHourlyCharges"
+            },
+            "yes"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "DatabaseSubnets": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Condition": "Enabled",
+      "Properties": {
+        "DBSubnetGroupDescription": "Private Aurora tier",
+        "SubnetIds": {
+          "Ref": "PrivateSubnetIds"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "Cluster": {
+      "Type": "AWS::RDS::DBCluster",
+      "Condition": "Enabled",
+      "Properties": {
+        "Engine": "aurora-postgresql",
+        "EngineMode": "provisioned",
+        "DatabaseName": "jobtracker",
+        "MasterUsername": "jobtracker_admin",
+        "ManageMasterUserPassword": true,
+        "StorageEncrypted": true,
+        "DBSubnetGroupName": {
+          "Ref": "DatabaseSubnets"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Ref": "DatabaseSecurityGroupId"
+          }
+        ],
+        "BackupRetentionPeriod": 7,
+        "DeletionProtection": true,
+        "CopyTagsToSnapshot": true,
+        "EnableIAMDatabaseAuthentication": true,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Writer": {
+      "Type": "AWS::RDS::DBInstance",
+      "Condition": "Enabled",
+      "Properties": {
+        "Engine": "aurora-postgresql",
+        "DBClusterIdentifier": {
+          "Ref": "Cluster"
+        },
+        "DBInstanceClass": "db.t4g.medium",
+        "PubliclyAccessible": false,
+        "AutoMinorVersionUpgrade": true,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    }
+  },
+  "Outputs": {
+    "ClusterEndpoint": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Cluster",
+          "Endpoint.Address"
+        ]
+      },
+      "Condition": "Enabled"
+    }
+  },
+  "Rules": {
+    "AcknowledgeCost": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "EnableResources"
+                  },
+                  "false"
+                ]
+              },
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AcknowledgeHourlyCharges"
+                  },
+                  "yes"
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Hourly or paid-feature costs must be acknowledged before enabling this lab."
+        }
+      ]
+    }
+  }
+}

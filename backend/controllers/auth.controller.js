@@ -1,3 +1,4 @@
+const { logError } = require("../utils/log-error.cjs");
 const pool = require("../db/pool");
 const crypto = require("crypto");
 const { hashPassword, verifyPassword } = require("../utils/password");
@@ -71,7 +72,7 @@ async function signup(req, res) {
     if (err && err.code === "23505") {
       return res.status(409).json({ error: "username already exists" });
     }
-    console.error(err);
+    logError(err);
     return res.status(500).json({ error: "Database error" });
   }
 }
@@ -120,7 +121,7 @@ async function login(req, res) {
 
     return res.status(401).json({ error: "Invalid credentials" });
   } catch (err) {
-    console.error(err);
+    logError(err);
     return res.status(500).json({ error: "Database error" });
   }
 }

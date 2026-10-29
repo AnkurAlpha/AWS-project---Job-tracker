@@ -1,0 +1,553 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Optional account-wide credit monitor and gross cost budget. All resources and scheduling disabled by default.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "EnableSchedule": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "CreateNewBudget": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ],
+      "Description": "Keep false when the existing account-wide gross budget is already configured"
+    },
+    "AlertEmail": {
+      "Type": "String",
+      "AllowedPattern": "[^\\s@]+@[^\\s@]+\\.[^\\s@]+"
+    },
+    "CreditReserveUSD": {
+      "Type": "Number",
+      "Default": 25,
+      "MinValue": 0
+    },
+    "ThresholdsUSD": {
+      "Type": "String",
+      "Default": "100,50,25,10",
+      "AllowedPattern": "[0-9]+(\\.[0-9]+)?(,[0-9]+(\\.[0-9]+)?)*"
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnableResources"
+        },
+        "true"
+      ]
+    },
+    "BudgetEnabled": {
+      "Fn::And": [
+        {
+          "Condition": "Enabled"
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "CreateNewBudget"
+            },
+            "true"
+          ]
+        }
+      ]
+    },
+    "ScheduleEnabled": {
+      "Fn::And": [
+        {
+          "Condition": "Enabled"
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableSchedule"
+            },
+            "true"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Alerts": {
+      "Type": "AWS::SNS::Topic",
+      "Condition": "Enabled",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "EmailSubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "Condition": "Enabled",
+      "Properties": {
+        "TopicArn": {
+          "Ref": "Alerts"
+        },
+        "Protocol": "email",
+        "Endpoint": {
+          "Ref": "AlertEmail"
+        }
+      }
+    },
+    "MonitorState": {
+      "Type": "AWS::DynamoDB::Table",
+      "Condition": "Enabled",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "monitor_id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "monitor_id",
+            "KeyType": "HASH"
+          }
+        ],
+        "BillingMode": "PROVISIONED",
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": 1,
+          "WriteCapacityUnits": 1
+        },
+        "DeletionProtectionEnabled": true,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "MonitorRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "Enabled",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ProjectOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-credit-monitor:*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "freetier:GetAccountPlanState"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sns:Publish"
+                  ],
+                  "Resource": {
+                    "Ref": "Alerts"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "MonitorState",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "cloudwatch:PutMetricData"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "cloudwatch:namespace": "JobTracker/Cost"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    },
+    "MonitorLog": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "Enabled",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-credit-monitor"
+        },
+        "RetentionInDays": 7
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Monitor": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "Enabled",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-credit-monitor"
+        },
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "MonitorRole",
+            "Arn"
+          ]
+        },
+        "MemorySize": 128,
+        "Timeout": 30,
+        "Code": {
+          "ZipFile": "\"\"\"Pure credit policy shared by the CLI and the optional scheduled Lambda.\"\"\"\nfrom datetime import datetime, timezone\nfrom decimal import Decimal, InvalidOperation\nimport math\n\nDEFAULT_THRESHOLDS = (100, 50, 25, 10)\n\n\ndef assess(plan, thresholds=DEFAULT_THRESHOLDS, reserve=25, now=None):\n    now = now or datetime.now(timezone.utc)\n    credits = plan.get(\"accountPlanRemainingCredits\", {})\n    try:\n        remaining = Decimal(str(credits[\"amount\"]))\n        reserve = Decimal(str(reserve))\n        levels = sorted({Decimal(str(t)) for t in thresholds}, reverse=True)\n    except (KeyError, InvalidOperation, TypeError, ValueError) as error:\n        raise ValueError(\"Credit balance or thresholds are missing/invalid; balance is unknown\") from error\n    if (not remaining.is_finite() or remaining < 0 or not reserve.is_finite() or reserve < 0\n            or credits.get(\"unit\") != \"USD\" or not levels\n            or any(not t.is_finite() or t < 0 for t in levels)):\n        raise ValueError(\"A finite nonnegative USD balance and thresholds are required\")\n    expiry = plan.get(\"accountPlanExpirationDate\")\n    if isinstance(expiry, str):\n        expiry = datetime.fromisoformat(expiry.replace(\"Z\", \"+00:00\"))\n    if not isinstance(expiry, datetime) or expiry.tzinfo is None:\n        raise ValueError(\"Free plan expiry is missing or lacks a timezone\")\n    days = math.floor((expiry - now).total_seconds() / 86400)\n    alerts = []\n    for threshold in levels:\n        if remaining <= threshold:\n            alerts.append(\"credits-at-or-below-\" + format(threshold.normalize(), \"f\"))\n    for day in (14, 7, 1, 0):\n        if days <= day:\n            alerts.append(\"plan-expires-within-\" + str(day) + \"-days\")\n    if plan.get(\"accountPlanType\") != \"FREE\" or plan.get(\"accountPlanStatus\") != \"ACTIVE\":\n        alerts.append(\"free-plan-not-active\")\n    if remaining <= reserve:\n        alerts.append(\"credit-reserve-reached\")\n    return {\n        \"remaining_usd\": float(remaining), \"reserve_usd\": float(reserve),\n        \"plan\": plan.get(\"accountPlanType\"), \"status\": plan.get(\"accountPlanStatus\"),\n        \"plan_expires_utc\": expiry.astimezone(timezone.utc).isoformat(),\n        \"days_until_plan_expiry\": days, \"alerts\": alerts,\n        \"hosting_allowed\": (plan.get(\"accountPlanType\") == \"FREE\"\n                            and plan.get(\"accountPlanStatus\") == \"ACTIVE\"\n                            and remaining > reserve and days >= 7),\n        \"note\": \"Credit alerts are advisory, not a spending cap. Plan expiry differs from individual credit expiry.\",\n    }\n\n\"\"\"Optional daily credit alert. Disabled in CloudFormation defaults; does not control EC2.\"\"\"\nimport json\nimport os\nfrom datetime import datetime, timezone\nfrom decimal import Decimal\nimport boto3\n\n\n\ndef handler(event, context, *, clients=None):\n    clients = clients or {\n        \"freetier\": boto3.client(\"freetier\", region_name=\"us-east-1\"),\n        \"sns\": boto3.client(\"sns\"), \"dynamodb\": boto3.client(\"dynamodb\"),\n        \"cloudwatch\": boto3.client(\"cloudwatch\"),\n    }\n    plan = clients[\"freetier\"].get_account_plan_state()\n    if plan.get(\"accountId\") != os.environ[\"EXPECTED_ACCOUNT_ID\"]:\n        raise ValueError(\"Wrong AWS account; notification and state writes refused\")\n    report = assess(plan, os.environ.get(\"THRESHOLDS_USD\", \"100,50,25,10\").split(\",\"),\n                    os.environ.get(\"RESERVE_USD\", \"25\"))\n    response = clients[\"dynamodb\"].get_item(\n        TableName=os.environ[\"STATE_TABLE\"], Key={\"monitor_id\": {\"S\": \"credit-plan\"}},\n        ConsistentRead=True)\n    previous = json.loads(response.get(\"Item\", {}).get(\"alert_keys\", {}).get(\"S\", \"[]\"))\n    new_alerts = sorted(set(report[\"alerts\"]) - set(previous))\n    if new_alerts:\n        clients[\"sns\"].publish(TopicArn=os.environ[\"ALERT_TOPIC_ARN\"],\n            Subject=\"JobTracker AWS credit or Free plan alert\",\n            Message=json.dumps({\"new_alerts\": new_alerts, **report}, sort_keys=True))\n    # Persist only after SNS accepts the publish. A failed state write may duplicate an\n    # alert; it cannot silently suppress an unsent notification. Recovery re-arms alerts.\n    clients[\"dynamodb\"].put_item(TableName=os.environ[\"STATE_TABLE\"], Item={\n        \"monitor_id\": {\"S\": \"credit-plan\"}, \"alert_keys\": {\"S\": json.dumps(report[\"alerts\"])},\n        \"remaining_usd\": {\"N\": str(Decimal(str(report[\"remaining_usd\"])))},\n        \"checked_at\": {\"S\": datetime.now(timezone.utc).isoformat()},\n    })\n    clients[\"cloudwatch\"].put_metric_data(Namespace=\"JobTracker/Cost\", MetricData=[{\n        \"MetricName\": \"RemainingCreditsUSD\", \"Value\": report[\"remaining_usd\"], \"Unit\": \"None\"}])\n    return {\"remaining_usd\": report[\"remaining_usd\"], \"new_alerts\": new_alerts}\n"
+        },
+        "Environment": {
+          "Variables": {
+            "EXPECTED_ACCOUNT_ID": {
+              "Ref": "AWS::AccountId"
+            },
+            "STATE_TABLE": {
+              "Ref": "MonitorState"
+            },
+            "ALERT_TOPIC_ARN": {
+              "Ref": "Alerts"
+            },
+            "RESERVE_USD": {
+              "Ref": "CreditReserveUSD"
+            },
+            "THRESHOLDS_USD": {
+              "Ref": "ThresholdsUSD"
+            }
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      },
+      "DependsOn": [
+        "MonitorLog"
+      ]
+    },
+    "DailyCheck": {
+      "Type": "AWS::Events::Rule",
+      "Condition": "Enabled",
+      "Properties": {
+        "ScheduleExpression": "rate(1 day)",
+        "State": {
+          "Fn::If": [
+            "ScheduleEnabled",
+            "ENABLED",
+            "DISABLED"
+          ]
+        },
+        "Targets": [
+          {
+            "Id": "CreditMonitor",
+            "Arn": {
+              "Fn::GetAtt": [
+                "Monitor",
+                "Arn"
+              ]
+            },
+            "RetryPolicy": {
+              "MaximumEventAgeInSeconds": 3600,
+              "MaximumRetryAttempts": 2
+            }
+          }
+        ]
+      }
+    },
+    "SchedulePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Condition": "Enabled",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "Monitor"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "DailyCheck",
+            "Arn"
+          ]
+        },
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        }
+      }
+    },
+    "FailedMonitorAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "Enabled",
+      "Properties": {
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Errors",
+        "Statistic": "Sum",
+        "Period": 86400,
+        "EvaluationPeriods": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "Monitor"
+            }
+          }
+        ],
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "MissingCreditSamplesAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "ScheduleEnabled",
+      "Properties": {
+        "Namespace": "JobTracker/Cost",
+        "MetricName": "RemainingCreditsUSD",
+        "Statistic": "SampleCount",
+        "Period": 86400,
+        "EvaluationPeriods": 2,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmDescription": "The enabled daily credit monitor has missed two daily samples",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "AlertTopicPolicy": {
+      "Type": "AWS::SNS::TopicPolicy",
+      "Condition": "Enabled",
+      "Properties": {
+        "Topics": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sns:Publish",
+              "Resource": {
+                "Ref": "Alerts"
+              },
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:*"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "GrossMonthlyBudget": {
+      "Type": "AWS::Budgets::Budget",
+      "Condition": "BudgetEnabled",
+      "Properties": {
+        "Budget": {
+          "BudgetName": {
+            "Fn::Sub": "${ProjectName}-gross-cost"
+          },
+          "BudgetType": "COST",
+          "TimeUnit": "MONTHLY",
+          "BudgetLimit": {
+            "Amount": 10,
+            "Unit": "USD"
+          },
+          "CostTypes": {
+            "IncludeCredit": false,
+            "IncludeRefund": false,
+            "IncludeTax": true,
+            "UseBlended": false
+          }
+        },
+        "NotificationsWithSubscribers": [
+          {
+            "Notification": {
+              "NotificationType": "ACTUAL",
+              "ComparisonOperator": "GREATER_THAN",
+              "ThresholdType": "ABSOLUTE_VALUE",
+              "Threshold": 1
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "AlertEmail"
+                }
+              }
+            ]
+          },
+          {
+            "Notification": {
+              "NotificationType": "ACTUAL",
+              "ComparisonOperator": "GREATER_THAN",
+              "ThresholdType": "ABSOLUTE_VALUE",
+              "Threshold": 5
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "AlertEmail"
+                }
+              }
+            ]
+          },
+          {
+            "Notification": {
+              "NotificationType": "ACTUAL",
+              "ComparisonOperator": "GREATER_THAN",
+              "ThresholdType": "ABSOLUTE_VALUE",
+              "Threshold": 10
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "AlertEmail"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "CreditMonitorFunction": {
+      "Value": {
+        "Ref": "Monitor"
+      },
+      "Condition": "Enabled"
+    },
+    "AlertsTopicArn": {
+      "Value": {
+        "Ref": "Alerts"
+      },
+      "Condition": "Enabled"
+    },
+    "ScheduleRule": {
+      "Value": {
+        "Ref": "DailyCheck"
+      },
+      "Condition": "Enabled"
+    }
+  }
+}

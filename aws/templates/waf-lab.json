@@ -1,0 +1,172 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Cost-gated AWS WAF managed rules and IP rate limiting. CloudFront scope must be created in us-east-1.",
+  "Metadata": {
+    "DeploymentStatus": "NOT DEPLOYED; offline smoke only",
+    "CostNotice": "Disabled defaults are not a promise of free operation when enabled."
+  },
+  "Parameters": {
+    "EnableResources": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "ProjectName": {
+      "Type": "String",
+      "Default": "jobtracker-lab",
+      "MaxLength": 24,
+      "AllowedPattern": "[a-z][a-z0-9-]{2,23}"
+    },
+    "AcknowledgeHourlyCharges": {
+      "Type": "String",
+      "Default": "no",
+      "AllowedValues": [
+        "no",
+        "yes"
+      ],
+      "Description": "This lab has ongoing costs and may require a Paid plan. Never upgrade automatically."
+    },
+    "Scope": {
+      "Type": "String",
+      "Default": "CLOUDFRONT",
+      "AllowedValues": [
+        "CLOUDFRONT",
+        "REGIONAL"
+      ]
+    }
+  },
+  "Conditions": {
+    "Enabled": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableResources"
+            },
+            "true"
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AcknowledgeHourlyCharges"
+            },
+            "yes"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "WebACL": {
+      "Type": "AWS::WAFv2::WebACL",
+      "Condition": "Enabled",
+      "Properties": {
+        "Scope": {
+          "Ref": "Scope"
+        },
+        "DefaultAction": {
+          "Allow": {}
+        },
+        "VisibilityConfig": {
+          "CloudWatchMetricsEnabled": false,
+          "SampledRequestsEnabled": false,
+          "MetricName": "JobTrackerWebAcl"
+        },
+        "Rules": [
+          {
+            "Name": "CommonRules",
+            "Priority": 0,
+            "OverrideAction": {
+              "None": {}
+            },
+            "Statement": {
+              "ManagedRuleGroupStatement": {
+                "VendorName": "AWS",
+                "Name": "AWSManagedRulesCommonRuleSet"
+              }
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": false,
+              "SampledRequestsEnabled": false,
+              "MetricName": "CommonRules"
+            }
+          },
+          {
+            "Name": "IPRateLimit",
+            "Priority": 1,
+            "Action": {
+              "Block": {}
+            },
+            "Statement": {
+              "RateBasedStatement": {
+                "Limit": 100,
+                "AggregateKeyType": "IP"
+              }
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": false,
+              "SampledRequestsEnabled": false,
+              "MetricName": "IPRateLimit"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CloudFormation"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WebAclArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "WebACL",
+          "Arn"
+        ]
+      },
+      "Condition": "Enabled"
+    }
+  },
+  "Rules": {
+    "AcknowledgeCost": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "EnableResources"
+                  },
+                  "false"
+                ]
+              },
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AcknowledgeHourlyCharges"
+                  },
+                  "yes"
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Hourly or paid-feature costs must be acknowledged before enabling this lab."
+        }
+      ]
+    }
+  }
+}
