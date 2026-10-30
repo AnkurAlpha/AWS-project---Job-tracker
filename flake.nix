@@ -8,7 +8,7 @@
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
-            packages = [ pkgs.git pkgs.nodejs_22 pkgs.pnpm pkgs.awscli2 pkgs.cfn-lint
+            packages = [ pkgs.git pkgs.nodejs_22 pkgs.pnpm pkgs.awscli2 pkgs.python3Packages.cfn-lint
               (pkgs.python3.withPackages (p: [ p.pytest p.boto3 ])) ];
           };
         });
